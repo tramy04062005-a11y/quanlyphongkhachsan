@@ -1,7 +1,6 @@
 import streamlit as st
 import pymysql
 from pymysql.cursors import DictCursor
-from pymysql.constants import CLIENT
 from datetime import datetime, date
 import pandas as pd
 import plotly.express as px
