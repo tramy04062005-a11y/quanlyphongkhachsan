@@ -1,5 +1,7 @@
 import streamlit as st
-import sqlite3
+import pymysql
+from pymysql.cursors import DictCursor
+from pymysql.constants import CLIENT
 from datetime import datetime, date
 import pandas as pd
 import plotly.express as px
@@ -16,150 +18,166 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-DB_NAME = "hotel.db"
-
-
 # =========================================================
-# DATABASE
+# DATABASE - AIVEN MYSQL
 # =========================================================
+
+# Thông tin kết nối có thể đặt trong Streamlit Cloud:
+# Settings → Secrets
+#
+# AIVEN_HOST = "..."
+# AIVEN_PORT = 3306
+# AIVEN_USER = "tramy04062005-a11y"
+# AIVEN_PASSWORD = "..."
+# AIVEN_DATABASE = "defaultdb"
+#
+# Có thể dùng biến môi trường tương ứng khi chạy local.
+
+AIVEN_HOST = st.secrets.get("AIVEN_HOST", "mysql-24eda0f5-tramy04062005-899b.k.aivencloud.com")
+AIVEN_PORT = int(st.secrets.get("AIVEN_PORT", 13321))
+AIVEN_USER = st.secrets.get("AIVEN_USER", "avnadmin")
+AIVEN_PASSWORD = st.secrets.get("AIVEN_PASSWORD", "AVNS_eyALQ_tYt5oQ7pItFnm")
+AIVEN_DATABASE = st.secrets.get("AIVEN_DATABASE", "defaultdb")
 
 def get_connection():
-    conn = sqlite3.connect(
-        DB_NAME,
-        check_same_thread=False
+    """Tạo kết nối MySQL tới Aiven."""
+    if not AIVEN_HOST:
+        raise RuntimeError(
+            "Chưa cấu hình AIVEN_HOST. "
+            "Hãy thêm thông tin Aiven MySQL vào Streamlit Secrets."
+        )
+
+    if not AIVEN_PASSWORD:
+        raise RuntimeError(
+            "Chưa cấu hình AIVEN_PASSWORD. "
+            "Hãy thêm mật khẩu Aiven MySQL vào Streamlit Secrets."
+        )
+
+    return pymysql.connect(
+        host=AIVEN_HOST,
+        port=AIVEN_PORT,
+        user=AIVEN_USER,
+        password=AIVEN_PASSWORD,
+        database=AIVEN_DATABASE,
+        charset="utf8mb4",
+        cursorclass=DictCursor,
+        autocommit=False,
+        connect_timeout=15,
+        read_timeout=30,
+        write_timeout=30,
+        ssl={"ssl": {}}
     )
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def init_database():
-
     conn = get_connection()
     cursor = conn.cursor()
 
-    # -----------------------------
-    # Bảng phòng
-    # -----------------------------
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_number TEXT UNIQUE NOT NULL,
-            room_type TEXT NOT NULL,
-            floor INTEGER NOT NULL,
-            price REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'Trống'
-        )
-    """)
-
-    # -----------------------------
-    # Bảng booking
-    # -----------------------------
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bookings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            room_id INTEGER NOT NULL,
-
-            guest_name TEXT NOT NULL,
-            phone TEXT,
-            email TEXT,
-            id_number TEXT,
-
-            check_in TEXT NOT NULL,
-            check_out TEXT NOT NULL,
-
-            adults INTEGER DEFAULT 1,
-            children INTEGER DEFAULT 0,
-
-            price_per_night REAL NOT NULL,
-            total_amount REAL DEFAULT 0,
-
-            status TEXT DEFAULT 'Đã đặt',
-
-            note TEXT,
-
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
-            FOREIGN KEY(room_id)
-            REFERENCES rooms(id)
-        )
-    """)
-
-    # -----------------------------
-    # Bảng cài đặt
-    # -----------------------------
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-
-    # -----------------------------
-    # Dữ liệu phòng mẫu
-    # -----------------------------
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM rooms"
-    )
-
-    room_count = cursor.fetchone()[0]
-
-    if room_count == 0:
-
-        sample_rooms = [
-            ("101", "Standard", 1, 800000, "Trống"),
-            ("102", "Standard", 1, 800000, "Trống"),
-            ("103", "Standard", 1, 800000, "Trống"),
-
-            ("201", "Deluxe", 2, 1200000, "Trống"),
-            ("202", "Deluxe", 2, 1200000, "Trống"),
-            ("203", "Deluxe", 2, 1200000, "Trống"),
-
-            ("301", "Suite", 3, 2000000, "Trống"),
-            ("302", "Suite", 3, 2000000, "Trống"),
-
-            ("401", "Villa", 4, 3500000, "Trống"),
-            ("402", "Villa", 4, 3500000, "Trống")
-        ]
-
-        cursor.executemany("""
-            INSERT INTO rooms
-            (
-                room_number,
-                room_type,
-                floor,
-                price,
-                status
-            )
-            VALUES (?, ?, ?, ?, ?)
-        """, sample_rooms)
-
-    # -----------------------------
-    # Settings mặc định
-    # -----------------------------
-
-    default_settings = {
-        "hotel_name": "My Hotel",
-        "hotel_address": "Việt Nam",
-        "hotel_phone": "0123 456 789"
-    }
-
-    for key, value in default_settings.items():
-
+    try:
+        # -----------------------------
+        # Bảng phòng
+        # -----------------------------
         cursor.execute("""
-            INSERT OR IGNORE INTO settings
-            (key, value)
-            VALUES (?, ?)
-        """, (key, value))
+            CREATE TABLE IF NOT EXISTS rooms (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                room_number VARCHAR(50) UNIQUE NOT NULL,
+                room_type VARCHAR(100) NOT NULL,
+                floor INT NOT NULL,
+                price DECIMAL(15,2) NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'Trống'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
 
-    conn.commit()
-    conn.close()
+        # -----------------------------
+        # Bảng booking
+        # -----------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bookings (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                room_id INT NOT NULL,
+                guest_name VARCHAR(255) NOT NULL,
+                phone VARCHAR(50),
+                email VARCHAR(255),
+                id_number VARCHAR(100),
+                check_in DATE NOT NULL,
+                check_out DATE NOT NULL,
+                adults INT DEFAULT 1,
+                children INT DEFAULT 0,
+                price_per_night DECIMAL(15,2) NOT NULL,
+                total_amount DECIMAL(15,2) DEFAULT 0,
+                status VARCHAR(50) DEFAULT 'Đã đặt',
+                note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_bookings_room
+                    FOREIGN KEY (room_id) REFERENCES rooms(id)
+                    ON UPDATE CASCADE
+                    ON DELETE RESTRICT
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # -----------------------------
+        # Bảng cài đặt
+        # -----------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                `key` VARCHAR(100) PRIMARY KEY,
+                `value` TEXT
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # -----------------------------
+        # Dữ liệu phòng mẫu
+        # -----------------------------
+        cursor.execute("SELECT COUNT(*) AS count FROM rooms")
+        room_count = cursor.fetchone()["count"]
+
+        if room_count == 0:
+            sample_rooms = [
+                ("101", "Standard", 1, 800000, "Trống"),
+                ("102", "Standard", 1, 800000, "Trống"),
+                ("103", "Standard", 1, 800000, "Trống"),
+                ("201", "Deluxe", 2, 1200000, "Trống"),
+                ("202", "Deluxe", 2, 1200000, "Trống"),
+                ("203", "Deluxe", 2, 1200000, "Trống"),
+                ("301", "Suite", 3, 2000000, "Trống"),
+                ("302", "Suite", 3, 2000000, "Trống"),
+                ("401", "Villa", 4, 3500000, "Trống"),
+                ("402", "Villa", 4, 3500000, "Trống")
+            ]
+
+            cursor.executemany("""
+                INSERT INTO rooms
+                    (room_number, room_type, floor, price, status)
+                VALUES (%s, %s, %s, %s, %s)
+            """, sample_rooms)
+
+        # -----------------------------
+        # Settings mặc định
+        # -----------------------------
+        default_settings = {
+            "hotel_name": "My Hotel",
+            "hotel_address": "Việt Nam",
+            "hotel_phone": "0123 456 789"
+        }
+
+        for key, value in default_settings.items():
+            cursor.execute("""
+                INSERT IGNORE INTO settings (`key`, `value`)
+                VALUES (%s, %s)
+            """, (key, value))
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
+# Khởi tạo bảng khi ứng dụng chạy
 init_database()
 
 
@@ -268,7 +286,7 @@ def get_setting(key, default=""):
         """
         SELECT value
         FROM settings
-        WHERE key = ?
+        WHERE key = %s
         """,
         (key,)
     )
@@ -283,12 +301,9 @@ def save_setting(key, value):
 
     execute_query(
         """
-        INSERT INTO settings
-        (key, value)
-        VALUES (?, ?)
-
-        ON CONFLICT(key)
-        DO UPDATE SET value = excluded.value
+        INSERT INTO settings (`key`, `value`)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)
         """,
         (key, value)
     )
@@ -326,7 +341,7 @@ menu = st.sidebar.radio(
 st.sidebar.divider()
 
 st.sidebar.info(
-    "💾 Dữ liệu được lưu trong file hotel.db"
+    "☁️ Dữ liệu được lưu trên Aiven MySQL"
 )
 
 
@@ -763,7 +778,7 @@ elif menu == "🛏️ Quản lý phòng":
                                 price,
                                 status
                             )
-                            VALUES (?, ?, ?, ?, 'Trống')
+                            VALUES (%s, %s, %s, %s, 'Trống')
                             """,
                             (
                                 room_number_clean,
@@ -780,7 +795,7 @@ elif menu == "🛏️ Quản lý phòng":
 
                         st.rerun()
 
-                    except sqlite3.IntegrityError:
+                    except pymysql.err.IntegrityError:
 
                         st.error(
                             "Số phòng này đã tồn tại."
@@ -915,11 +930,11 @@ elif menu == "🛏️ Quản lý phòng":
                         """
                         UPDATE rooms
                         SET
-                            room_type = ?,
-                            floor = ?,
-                            price = ?,
-                            status = ?
-                        WHERE id = ?
+                            room_type = %s,
+                            floor = %s,
+                            price = %s,
+                            status = %s
+                        WHERE id = %s
                         """,
                         (
                             new_type,
@@ -992,7 +1007,7 @@ elif menu == "🛏️ Quản lý phòng":
                     """
                     UPDATE rooms
                     SET status = 'Trống'
-                    WHERE id = ?
+                    WHERE id = %s
                     """,
                     (cleaning_id,)
                 )
@@ -1060,7 +1075,7 @@ elif menu == "🛏️ Quản lý phòng":
                     """
                     SELECT COUNT(*) AS count
                     FROM bookings
-                    WHERE room_id = ?
+                    WHERE room_id = %s
                     """,
                     (delete_id,)
                 ).iloc[0]["count"]
@@ -1077,7 +1092,7 @@ elif menu == "🛏️ Quản lý phòng":
                     execute_query(
                         """
                         DELETE FROM rooms
-                        WHERE id = ?
+                        WHERE id = %s
                         """,
                         (delete_id,)
                     )
@@ -1277,7 +1292,7 @@ elif menu == "📋 Đặt phòng":
                             """
                             SELECT status
                             FROM rooms
-                            WHERE id = ?
+                            WHERE id = %s
                             """,
                             (room_id,)
                         )
@@ -1319,9 +1334,9 @@ elif menu == "📋 Đặt phòng":
                                         )
                                         VALUES
                                         (
-                                            ?, ?, ?, ?, ?,
-                                            ?, ?, ?, ?, ?,
-                                            ?, ?, ?
+                                            %s, %s, %s, %s, %s,
+                                            %s, %s, %s, %s, %s,
+                                            %s, %s, %s
                                         )
                                         """,
                                         (
@@ -1344,7 +1359,7 @@ elif menu == "📋 Đặt phòng":
                                         """
                                         UPDATE rooms
                                         SET status = 'Đã đặt'
-                                        WHERE id = ?
+                                        WHERE id = %s
                                         """,
                                         (room_id,)
                                     )
@@ -1494,7 +1509,7 @@ elif menu == "📋 Đặt phòng":
                             """
                             SELECT status
                             FROM rooms
-                            WHERE room_number = ?
+                            WHERE room_number = %s
                             """,
                             (booking["Phòng"],)
                         )
@@ -1516,7 +1531,7 @@ elif menu == "📋 Đặt phòng":
                                     """
                                     UPDATE bookings
                                     SET status = 'Đang ở'
-                                    WHERE id = ?
+                                    WHERE id = %s
                                     """,
                                     (selected_booking_id,)
                                 ),
@@ -1524,7 +1539,7 @@ elif menu == "📋 Đặt phòng":
                                     """
                                     UPDATE rooms
                                     SET status = 'Đang ở'
-                                    WHERE room_number = ?
+                                    WHERE room_number = %s
                                     """,
                                     (booking["Phòng"],)
                                 )
@@ -1561,7 +1576,7 @@ elif menu == "📋 Đặt phòng":
                                 """
                                 UPDATE bookings
                                 SET status = 'Đã trả phòng'
-                                WHERE id = ?
+                                WHERE id = %s
                                 """,
                                 (selected_booking_id,)
                             ),
@@ -1569,7 +1584,7 @@ elif menu == "📋 Đặt phòng":
                                 """
                                 UPDATE rooms
                                 SET status = 'Đang dọn'
-                                WHERE room_number = ?
+                                WHERE room_number = %s
                                 """,
                                 (booking["Phòng"],)
                             )
@@ -1607,7 +1622,7 @@ elif menu == "📋 Đặt phòng":
                                 """
                                 UPDATE bookings
                                 SET status = 'Đã hủy'
-                                WHERE id = ?
+                                WHERE id = %s
                                 """,
                                 (selected_booking_id,)
                             ),
@@ -1615,7 +1630,7 @@ elif menu == "📋 Đặt phòng":
                                 """
                                 UPDATE rooms
                                 SET status = 'Trống'
-                                WHERE room_number = ?
+                                WHERE room_number = %s
                                 """,
                                 (booking["Phòng"],)
                             )
@@ -1978,13 +1993,12 @@ elif menu == "⚙️ Cài đặt":
     )
 
     st.info(
-        "Dữ liệu của hệ thống được lưu "
-        "trong file hotel.db."
+        "☁️ Dữ liệu của hệ thống được lưu trên "
+        "cơ sở dữ liệu MySQL của Aiven."
     )
 
-    st.warning(
-        "⚠️ Không xóa file hotel.db nếu "
-        "bạn muốn giữ dữ liệu."
+    st.success(
+        "🔒 Kết nối database được cấu hình qua Streamlit Secrets."
     )
 
     st.divider()
@@ -2052,5 +2066,5 @@ elif menu == "⚙️ Cài đặt":
     st.divider()
 
     st.caption(
-        "Hotel Manager • Streamlit • SQLite • Plotly"
+        "Hotel Manager • Streamlit • Aiven MySQL • Plotly"
     )
